@@ -42,7 +42,7 @@
                @(0x100) // v1.0
            ]
        ],
-       @"0100 - ServiceName*": @"MAP MNS-notifier"
+       @"0100 - ServiceName*": @"CSMNSService"
     };
 
     // Publish SDP record
