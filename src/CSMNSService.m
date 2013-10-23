@@ -2,9 +2,8 @@
 
 
 @interface CSMNSService ()
-@property (nonatomic, assign) IOBluetoothUserNotification *connectNotification;
+@property (nonatomic, retain) IOBluetoothSDPServiceRecord *sdpRecord;
 @property (nonatomic, retain) NSMutableDictionary *mnsSessions;
-@property (nonatomic, assign) CFMutableDataRef obexHeader;
 @property (nonatomic, retain) NSMutableDictionary *masSessions;
 @end
 
@@ -28,14 +27,6 @@
        @"0001 - ServiceClassIDList": @[
            [IOBluetoothSDPUUID uuid16:kBluetoothSDPUUID16ServiceClassMessageNotificationServer]
        ],
-       @"0004 - ProtocolDescriptorList": @[
-           @[[IOBluetoothSDPUUID uuid16:kBluetoothSDPUUID16L2CAP]],
-           @[
-               [IOBluetoothSDPUUID uuid16:kBluetoothSDPUUID16RFCOMM],
-               @{@"DataElementSize": @1, @"DataElementType": @1, @"DataElementValue": @10}
-           ],
-           @[[IOBluetoothSDPUUID uuid16:kBluetoothSDPUUID16OBEX]]
-       ],
        @"0009 - BluetoothProfileDescriptorList": @[
            @[
                [IOBluetoothSDPUUID uuid16:kBluetoothSDPUUID16ServiceClassMessageAccessProfile],
@@ -46,95 +37,51 @@
     };
 
     // Publish SDP record
-    IOBluetoothSDPServiceRecordRef serviceRecordRef;
-    IOReturn err = IOBluetoothAddServiceDict((CFDictionaryRef)recordAttributes, &serviceRecordRef);
-    if(err != kIOReturnSuccess) return NO;
-    IOBluetoothSDPServiceRecord *serviceRecord = [IOBluetoothSDPServiceRecord withSDPServiceRecordRef:serviceRecordRef];
-    if(!serviceRecord) {
-        CFRelease(serviceRecordRef);
-        return NO;
-    }
+    _sdpRecord = [[CSBluetoothOBEXSession publishService:recordAttributes startHandler:^(CSBluetoothOBEXSession *session) {
+        session.delegate = self;
+        [_mnsSessions setObject:session forKey:[session getDevice]];
+    }] retain];
 
-    // Start listening for connections to the service
-    BluetoothRFCOMMChannelID channelId;
-    [serviceRecord getRFCOMMChannelID:&channelId];
-    self.connectNotification = [IOBluetoothRFCOMMChannel registerForChannelOpenNotifications:self selector:@selector(serverConnectNotification:channel:) withChannelID:channelId direction:kIOBluetoothUserNotificationChannelDirectionIncoming];
-    CFRelease(serviceRecordRef);
-
-    return YES;
-}
-
-- (void)serverConnectNotification:(IOBluetoothUserNotification *)notification channel:(IOBluetoothRFCOMMChannel *)channel {
-    IOBluetoothDevice *device = [channel getDevice];
-    IOBluetoothOBEXSession *session = [IOBluetoothOBEXSession withIncomingRFCOMMChannel:channel eventSelector:@selector(serverOBEXEvent:) selectorTarget:self refCon:device];
-    [_mnsSessions setObject:session forKey:device];
+    return !!_sdpRecord;
 }
 
 #define MNS_TARGET_HEADER_UUID "\xBB\x58\x2B\x41\x42\x0C\x11\xDB\xB0\xDE\x08\x00\x20\x0C\x9A\x66"
 #define CONNECTION_ID "\xDE\xAD\xBE\xEF"
-- (void)serverOBEXEvent:(const OBEXSessionEvent *)event {
-    // Release old header data
-    if(_obexHeader) CFRelease(_obexHeader);
-    _obexHeader = nil;
-    
-    // Get the IOBluetoothOBEXSession object for the event
-    IOBluetoothDevice *device = event->refCon;
-    IOBluetoothOBEXSession *session = [_mnsSessions objectForKey:device];
+- (void)OBEXSession:(CSBluetoothOBEXSession *)session receivedConnect:(NSDictionary *)headers {
+    NSLog(@"MNS: Received connect command: %@", headers);
+    [session sendConnectResponse:kOBEXResponseCodeSuccessWithFinalBit headers:@{
+        (id)kOBEXHeaderIDKeyConnectionID: [NSData dataWithBytesNoCopy:CONNECTION_ID length:4 freeWhenDone:NO],
+        (id)kOBEXHeaderIDKeyWho: [NSData dataWithBytesNoCopy:MNS_TARGET_HEADER_UUID length:16 freeWhenDone:NO]
+    }];
+}
 
-    // Build a response
-    CFMutableDictionaryRef outHeaders = nil;
-    CFDictionaryRef inHeaders = nil;
-    switch(event->type) {
-        case kOBEXSessionEventTypeConnectCommandReceived:
-            inHeaders = OBEXGetHeaders(event->u.connectCommandData.headerDataPtr, event->u.connectCommandData.headerDataLength);
-            NSLog(@"MNS: Received connect command: %@", inHeaders);
-            CFRelease(inHeaders);
-            outHeaders = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-            OBEXAddConnectionIDHeader(CONNECTION_ID, 4, outHeaders);
-            OBEXAddWhoHeader(MNS_TARGET_HEADER_UUID, 16, outHeaders);
-            self.obexHeader = OBEXHeadersToBytes(outHeaders);
-            [session OBEXConnectResponse:kOBEXResponseCodeSuccessWithFinalBit flags:0 maxPacketLength:event->u.connectCommandData.maxPacketSize optionalHeaders:CFDataGetMutableBytePtr(_obexHeader) optionalHeadersLength:CFDataGetLength(_obexHeader) eventSelector:@selector(serverOBEXEvent:) selectorTarget:self refCon:device];
-            CFRelease(outHeaders);
-            break;
-        case kOBEXSessionEventTypePutCommandReceived:
-            inHeaders = OBEXGetHeaders(event->u.putCommandData.headerDataPtr, event->u.putCommandData.headerDataLength);
-            NSLog(@"Put headers: %@", inHeaders);
-            if(CFDictionaryContainsKey(inHeaders, kOBEXHeaderIDKeyEndOfBody)) {
-                NSString *body = [[NSString alloc] initWithData:(NSData *)CFDictionaryGetValue(inHeaders, kOBEXHeaderIDKeyEndOfBody) encoding:NSUTF8StringEncoding];
-                NSLog(@"Body: %@", body);
-                [self serverMAPEvent:body device:device];
-                [body release];
-                [session OBEXPutResponse:kOBEXResponseCodeSuccessWithFinalBit optionalHeaders:nil optionalHeadersLength:0 eventSelector:@selector(serverOBEXEvent:) selectorTarget:self refCon:device];
-            } else {
-                [session OBEXPutResponse:kOBEXResponseCodeContinueWithFinalBit optionalHeaders:nil optionalHeadersLength:0 eventSelector:@selector(serverOBEXEvent:) selectorTarget:self refCon:device];
-            }
-            CFRelease(inHeaders);
-            break;
-        case kOBEXSessionEventTypeAbortCommandReceived:
-            NSLog(@"MNS: Got an abort command...");
-            break;
-        case kOBEXSessionEventTypeDisconnectCommandReceived:
-            NSLog(@"MNS: Received disconnect");
-            [_mnsSessions removeObjectForKey:device];
-            break;
-        case kOBEXSessionEventTypeError:
-            NSLog(@"MNS: Got an error event: %d", event->u.errorData.error);
-            break;
-        default:
-            NSLog(@"MNS: Invalid command type");
-            break;
+- (void)OBEXSession:(CSBluetoothOBEXSession *)session receivedPut:(NSDictionary *)headers {
+    NSData *endOfBody = headers[(id)kOBEXHeaderIDKeyEndOfBody];
+    if(endOfBody) {
+        NSString *body = [[NSString alloc] initWithData:endOfBody encoding:NSUTF8StringEncoding];
+        NSXMLDocument *doc = [[NSXMLDocument alloc] initWithXMLString:body options:0 error:nil];
+        NSArray *newMessageHandles = [doc nodesForXPath:@".//event[@type='NewMessage']/@handle" error:nil];
+        if([newMessageHandles count] > 0) {
+            NSString *handle = [[newMessageHandles objectAtIndex:0] stringValue];
+            NSLog(@"MNS: New message: %@", handle);
+            [[_masSessions objectForKey:[session getDevice]] loadMessage:handle];
+        }
+        [doc release];
+        [body release];
+
+        [session sendPutSuccessResponse];
+    } else {
+        [session sendPutContinueResponse];
     }
 }
 
-- (void)serverMAPEvent:(NSString *)body device:(IOBluetoothDevice *)device {
-    NSXMLDocument *doc = [[NSXMLDocument alloc] initWithXMLString:body options:0 error:nil];
-    NSArray *newMessageHandles = [doc nodesForXPath:@".//event[@type='NewMessage']/@handle" error:nil];
-    if([newMessageHandles count] > 0) {
-        NSString *handle = [[newMessageHandles objectAtIndex:0] stringValue];
-        NSLog(@"MNS: New message: %@", handle);
-        [[_masSessions objectForKey:device] loadMessage:handle];
-    }
-    [doc release];
+- (void)OBEXSession:(CSBluetoothOBEXSession *)session receivedDisconnect:(NSDictionary *)headers {
+    NSLog(@"MNS: Received disconnect");
+    [_mnsSessions removeObjectForKey:[session getDevice]];
+}
+
+- (void)OBEXSession:(CSBluetoothOBEXSession *)session receivedError:(NSError *)error {
+    NSLog(@"MNS: Got an error event: %ld", error.code);
 }
 
 #pragma mark - Client Side
@@ -184,9 +131,7 @@
 }
 
 - (void)dealloc {
-    [self.connectNotification unregister];
     self.mnsSessions = nil;
-    if(self.obexHeader) CFRelease(self.obexHeader);
     self.masSessions = nil;
 
     [super dealloc];
