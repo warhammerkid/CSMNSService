@@ -98,11 +98,17 @@
             break;
         case kOBEXSessionEventTypePutCommandReceived:
             inHeaders = OBEXGetHeaders(event->u.putCommandData.headerDataPtr, event->u.putCommandData.headerDataLength);
-            NSString *body = [[NSString alloc] initWithData:(NSData *)CFDictionaryGetValue(inHeaders, kOBEXHeaderIDKeyEndOfBody) encoding:NSUTF8StringEncoding];
-            [self serverMAPEvent:body device:device];
-            [body release];
+            NSLog(@"Put headers: %@", inHeaders);
+            if(CFDictionaryContainsKey(inHeaders, kOBEXHeaderIDKeyEndOfBody)) {
+                NSString *body = [[NSString alloc] initWithData:(NSData *)CFDictionaryGetValue(inHeaders, kOBEXHeaderIDKeyEndOfBody) encoding:NSUTF8StringEncoding];
+                NSLog(@"Body: %@", body);
+                [self serverMAPEvent:body device:device];
+                [body release];
+                [session OBEXPutResponse:kOBEXResponseCodeSuccessWithFinalBit optionalHeaders:nil optionalHeadersLength:0 eventSelector:@selector(serverOBEXEvent:) selectorTarget:self refCon:device];
+            } else {
+                [session OBEXPutResponse:kOBEXResponseCodeContinueWithFinalBit optionalHeaders:nil optionalHeadersLength:0 eventSelector:@selector(serverOBEXEvent:) selectorTarget:self refCon:device];
+            }
             CFRelease(inHeaders);
-            [session OBEXPutResponse:kOBEXResponseCodeSuccessWithFinalBit optionalHeaders:nil optionalHeadersLength:0 eventSelector:@selector(serverOBEXEvent:) selectorTarget:self refCon:device];
             break;
         case kOBEXSessionEventTypeAbortCommandReceived:
             NSLog(@"MNS: Got an abort command...");
