@@ -1,9 +1,9 @@
 #import "CSMASSession.h"
+#import "CSBluetoothOBEXSession.h"
 
 
 @interface CSMASSession ()
-@property (nonatomic, retain) IOBluetoothOBEXSession *session;
-@property (nonatomic, assign) CFMutableDataRef obexHeader;
+@property (nonatomic, retain) CSBluetoothOBEXSession *session;
 @property (nonatomic, assign) IOBluetoothUserNotification *disconnectNotification;
 @property (nonatomic, retain) NSTimer *reconnectTimer;
 @end
@@ -24,64 +24,46 @@
 - (void)connect {
     IOBluetoothSDPServiceRecord *record = [_device getServiceRecordForUUID:[IOBluetoothSDPUUID uuid16:kBluetoothSDPUUID16ServiceClassMessageAccessServer]];
     [_session release];
-    _session = [[IOBluetoothOBEXSession alloc] initWithSDPServiceRecord:record];
+    _session = [[CSBluetoothOBEXSession alloc] initWithSDPServiceRecord:record];
 
-    CFMutableDictionaryRef headers = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    OBEXAddTargetHeader(MAS_TARGET_HEADER_UUID, 16, headers);
-    _obexHeader = OBEXHeadersToBytes(headers);
-    CFRelease(headers);
-    [_session OBEXConnect:kOBEXConnectFlagNone maxPacketLength:4096 optionalHeaders:CFDataGetMutableBytePtr(_obexHeader) optionalHeadersLength:CFDataGetLength(_obexHeader) eventSelector:@selector(connectEvent:) selectorTarget:self refCon:nil];
-}
+    [_session sendConnect:@{
+        (id)kOBEXHeaderIDKeyTarget: [NSData dataWithBytesNoCopy:MAS_TARGET_HEADER_UUID length:16 freeWhenDone:NO]
+    } handler:^(CSBluetoothOBEXSession *session, NSDictionary *headers, NSError *error) {
+        if(error) {
+            switch(error.code) {
+                case kOBEXResponseCodeServiceUnavailableWithFinalBit:
+                    NSLog(@"MAS: Connection Error: Service Unavailable");
+                    break;
+                case kOBEXResponseCodeBadRequestWithFinalBit:
+                    NSLog(@"MAS: Connection Error: Bad Request");
+                    break;
+                case kOBEXResponseCodeForbiddenWithFinalBit:
+                    // On iOS, the user must turn on notifications for this device to not get this message
+                    NSLog(@"MAS: Connection Error: Forbidden");
+                    break;
+                default:
+                    NSLog(@"MAS: Error on connect: %ld", error.code);
+                    break;
+            }
+        } else {
+            // Get connection id
+            [_connectionId release];
+            _connectionId = [headers[(id)kOBEXHeaderIDKeyConnectionID] retain];
 
-- (void)connectEvent:(const OBEXSessionEvent *)event {
-    // Release header data
-    CFRelease(_obexHeader);
-    _obexHeader = nil;
-    
-    // Handle response
-    if(event->type == kOBEXSessionEventTypeError) {
-        NSLog(@"MAS: OBEX error on connect: %d", event->u.errorData.error);
-    } else {
-        OBEXConnectCommandResponseData response = event->u.connectCommandResponseData;
-        CFDictionaryRef headers;
-        switch(response.serverResponseOpCode) {
-            case kOBEXResponseCodeSuccessWithFinalBit:
-                headers = OBEXGetHeaders(response.headerDataPtr, response.headerDataLength);
-                [_connectionId release];
-                _connectionId = CFRetain(CFDictionaryGetValue(headers, kOBEXHeaderIDKeyConnectionID));
-                CFRelease(headers);
-                break;
-            case kOBEXResponseCodeServiceUnavailableWithFinalBit:
-                NSLog(@"MAS: Connection Error: Service Unavailable");
-                break;
-            case kOBEXResponseCodeBadRequestWithFinalBit:
-                NSLog(@"MAS: Connection Error: Bad Request");
-                break;
-            case kOBEXResponseCodeForbiddenWithFinalBit:
-                // On iOS, the user must turn on notifications for this device to not get this message
-                NSLog(@"MAS: Connection Error: Forbidden");
-                break;
-            default:
-                NSLog(@"MAS: Unhandled response code on connect: %d", response.serverResponseOpCode);
-                break;
+            // Register for disconnect
+            _disconnectNotification = [_device registerForDisconnectNotification:self selector:@selector(disconnectedNotification:device:)];
+
+            // Disable reconnect timer if it's running
+            [_reconnectTimer invalidate];
+            [_reconnectTimer release];
+            _reconnectTimer = nil;
+
+            // Notify delegate
+            if([_delegate respondsToSelector:@selector(masSessionConnected:)]) {
+                [_delegate masSessionConnected:self];
+            }
         }
-    }
-    
-    // We are successfully connected!
-    if(_connectionId) {
-        // Register for disconnect
-        _disconnectNotification = [_device registerForDisconnectNotification:self selector:@selector(disconnectedNotification:device:)];
-        
-        // Disable reconnect timer if it's running
-        [_reconnectTimer invalidate];
-        [_reconnectTimer release];
-        _reconnectTimer = nil;
-        
-        // Notify delegate
-        if([_delegate respondsToSelector:@selector(masSessionConnected:)]) {
-            [_delegate masSessionConnected:self];
-        }
-    }
+    }];
 }
 
 - (void)attemptAutoReconnect {
@@ -98,79 +80,49 @@
 
 - (void)setNotificationsEnabled:(BOOL)enabled {
     if(!_connectionId) return;
-
-    SEL eventSelector;
-    char *appParamHeader;
-    if(enabled) {
-        eventSelector = @selector(notificationsEnabledEvent:);
-        appParamHeader = "\x0E\x01\x01";
-    } else {
-        eventSelector = @selector(notificationsDisabledEvent:);
-        appParamHeader = "\x0E\x01\x00";
-    }
     
-    CFMutableDictionaryRef headers = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    OBEXAddConnectionIDHeader([_connectionId bytes], (uint32_t)[_connectionId length], headers);
-    OBEXAddTypeHeader(CFSTR("x-bt/MAP-NotificationRegistration"), headers);
-    OBEXAddApplicationParameterHeader(appParamHeader, 3, headers);
-    _obexHeader = OBEXHeadersToBytes(headers);
-    CFRelease(headers);
-    [_session OBEXPut:YES headersData:CFDataGetMutableBytePtr(_obexHeader) headersDataLength:CFDataGetLength(_obexHeader) bodyData:"\x30" bodyDataLength:1 eventSelector:eventSelector selectorTarget:self refCon:nil];
-}
-
-- (void)notificationsEnabledEvent:(const OBEXSessionEvent *)event {
-    NSLog(@"MAS: Notifications enabled");
-    CFRelease(_obexHeader);
-    _obexHeader = nil;
-    
-    if([_delegate respondsToSelector:@selector(masSessionNotificationsEnabled:)]) {
-        [_delegate masSessionNotificationsEnabled:self];
-    }
-}
-
-- (void)notificationsDisabledEvent:(const OBEXSessionEvent *)event {
-    CFRelease(_obexHeader);
-    _obexHeader = nil;
-    
-    if([_delegate respondsToSelector:@selector(masSessionNotificationsDisabled:)]) {
-        [_delegate masSessionNotificationsDisabled:self];
-    }
+    NSMutableData *emptyBody = [NSMutableData dataWithBytes:"\x30" length:1];
+    NSData *appParams = [NSData dataWithBytesNoCopy:(enabled ? "\x0E\x01\x01" : "\x0E\x01\x00") length:3 freeWhenDone:NO];
+    [_session sendPut:@{
+        (id)kOBEXHeaderIDKeyConnectionID: _connectionId,
+        (id)kOBEXHeaderIDKeyType: @"x-bt/MAP-NotificationRegistration",
+        (id)kOBEXHeaderIDKeyAppParameters: appParams
+    } body:emptyBody handler:^(CSBluetoothOBEXSession *session, NSDictionary *headers, NSError *error) {
+        if(error) {
+            NSLog(@"MAS: Error changing notification state: %ld", error.code);
+        } else if(enabled) {
+            NSLog(@"MAS: Notifications enabled");
+            if([_delegate respondsToSelector:@selector(masSessionNotificationsEnabled:)]) {
+                [_delegate masSessionNotificationsEnabled:self];
+            }
+        } else {
+            if([_delegate respondsToSelector:@selector(masSessionNotificationsDisabled:)]) {
+                [_delegate masSessionNotificationsDisabled:self];
+            }
+        }
+    }];
 }
 
 - (void)loadMessage:(NSString *)messageHandle {
-    CFMutableDictionaryRef headers = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    OBEXAddConnectionIDHeader([self.connectionId bytes], (uint32_t)[self.connectionId length], headers);
-    OBEXAddNameHeader((CFStringRef)messageHandle, headers);
-    OBEXAddTypeHeader(CFSTR("x-bt/message"), headers);
-    OBEXAddApplicationParameterHeader("\x0A\x01\x00\x14\x01\x01", 6, headers); // Attachment Off & Charset UTF-8
-    _obexHeader = OBEXHeadersToBytes(headers);
-    CFRelease(headers);
-    [_session OBEXGet:YES headers:CFDataGetMutableBytePtr(_obexHeader) headersLength:CFDataGetLength(_obexHeader) eventSelector:@selector(messageLoadEvent:) selectorTarget:self refCon:nil];
-}
+    if(!_connectionId) return;
 
-- (void)messageLoadEvent:(const OBEXSessionEvent *)event {
-    // Release header data
-    CFRelease(_obexHeader);
-    _obexHeader = nil;
-    
-    // Handle response
-    if(event->type == kOBEXSessionEventTypeError) {
-        NSLog(@"MAS: OBEX error on load message: %d", event->u.errorData.error);
-    } else {
-        OBEXOpCode responseCode = event->u.getCommandResponseData.serverResponseOpCode;
-        if(responseCode == kOBEXResponseCodeSuccessWithFinalBit) {
-            CFDictionaryRef headers = OBEXGetHeaders(event->u.getCommandResponseData.headerDataPtr, event->u.getCommandResponseData.headerDataLength);
-            NSString *body = [[NSString alloc] initWithData:(NSData *)CFDictionaryGetValue(headers, kOBEXHeaderIDKeyEndOfBody) encoding:NSUTF8StringEncoding];
+    [_session sendGet:@{
+        (id)kOBEXHeaderIDKeyConnectionID: _connectionId,
+        (id)kOBEXHeaderIDKeyType: @"x-bt/message",
+        (id)kOBEXHeaderIDKeyName: messageHandle,
+        (id)kOBEXHeaderIDKeyAppParameters: [NSData dataWithBytesNoCopy:"\x0A\x01\x00\x14\x01\x01" length:6 freeWhenDone:NO] // Attachment Off & Charset UTF-8
+    } handler:^(CSBluetoothOBEXSession *session, NSDictionary *headers, NSError *error) {
+        if(error) {
+            NSLog(@"MAS: Error loading message: %ld", error.code);
+        } else {
+            NSString *body = [[NSString alloc] initWithData:headers[(id)kOBEXHeaderIDKeyEndOfBody] encoding:NSUTF8StringEncoding];
             if([_delegate respondsToSelector:@selector(masSession:messageDataLoaded:)]) {
                 NSDictionary *message = [self parseMessageBody:body];
                 [_delegate masSession:self messageDataLoaded:message];
             }
             [body release];
-            CFRelease(headers);
-        } else {
-            NSLog(@"MAS: Unhandled response code on message load: %d", responseCode);
         }
-    }
+    }];
 }
 
 - (NSDictionary *)parseMessageBody:(NSString *)body {
@@ -184,30 +136,16 @@
 }
 
 - (void)disconnect {
-    CFMutableDictionaryRef headers = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    OBEXAddConnectionIDHeader([_connectionId bytes], (uint32_t)[_connectionId length], headers);
-    _obexHeader = OBEXHeadersToBytes(headers);
-    CFRelease(headers);
-    [_session OBEXDisconnect:CFDataGetMutableBytePtr(_obexHeader) optionalHeadersLength:CFDataGetLength(_obexHeader) eventSelector:@selector(disconnectEvent:) selectorTarget:self refCon:nil];
-}
-
-- (void)disconnectEvent:(const OBEXSessionEvent *)event {
-    // Release header data
-    CFRelease(_obexHeader);
-    _obexHeader = nil;
-    
-    // Handle response
-    if(event->type == kOBEXSessionEventTypeError) {
-        NSLog(@"MAS: OBEX error on disconnect: %d", event->u.errorData.error);
-    } else {
-        OBEXOpCode responseCode = event->u.disconnectCommandResponseData.serverResponseOpCode;
-        if(responseCode == kOBEXResponseCodeSuccessWithFinalBit) {
+    [_session sendDisconnect:@{
+        (id)kOBEXHeaderIDKeyConnectionID: _connectionId
+    } handler:^(CSBluetoothOBEXSession *session, NSDictionary *headers, NSError *error) {
+        if(error) {
+            NSLog(@"MAS: Error on disconnect: %ld", error.code);
+        } else {
             NSLog(@"MAS: Disconnect success");
             [self handleDisconnect];
-        } else {
-            NSLog(@"MAS: Unhandled response code on disconnect: %d", responseCode);
         }
-    }
+    }];
 }
 
 - (void)disconnectedNotification:(IOBluetoothUserNotification *)notification device:(IOBluetoothDevice *)device {
@@ -237,7 +175,6 @@
     [_device release];
     [_session release];
     [_connectionId release];
-    if(_obexHeader) CFRelease(_obexHeader);
     [_reconnectTimer invalidate];
     [_reconnectTimer release];
     

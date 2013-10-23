@@ -2,6 +2,8 @@
 
 
 @protocol CSBluetoothOBEXSessionDelegate;
+@class CSBluetoothOBEXSession;
+typedef void(^ResponseHandler)(CSBluetoothOBEXSession*, NSDictionary*, NSError*);
 
 
 @interface CSBluetoothOBEXSession : NSObject
@@ -16,6 +18,13 @@
 - (void)sendConnectResponse:(OBEXOpCode)responseCode headers:(NSDictionary *)headers;
 - (void)sendPutContinueResponse;
 - (void)sendPutSuccessResponse;
+
+// Client sessions
+- (instancetype)initWithSDPServiceRecord:(IOBluetoothSDPServiceRecord *)record;
+- (void)sendConnect:(NSDictionary *)headers handler:(ResponseHandler)handler;
+- (void)sendGet:(NSDictionary *)headers handler:(ResponseHandler)handler;
+- (void)sendPut:(NSDictionary *)headers body:(NSMutableData *)body handler:(ResponseHandler)handler;
+- (void)sendDisconnect:(NSDictionary *)headers handler:(ResponseHandler)handler;
 
 @end
 
