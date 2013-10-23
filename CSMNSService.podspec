@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name         = 'CSMNSService'
-  s.version      = '0.1.1'
+  s.version      = '0.2.0'
   s.summary      = 'A bluetooth library for getting notifications from your phone when you get texts'
   s.platform     = :osx
   s.license      = 'MIT'
