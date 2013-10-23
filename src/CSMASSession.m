@@ -142,8 +142,7 @@
     OBEXAddConnectionIDHeader([self.connectionId bytes], (uint32_t)[self.connectionId length], headers);
     OBEXAddNameHeader((CFStringRef)messageHandle, headers);
     OBEXAddTypeHeader(CFSTR("x-bt/message"), headers);
-    OBEXAddApplicationParameterHeader("\x0A\x01\x00", 3, headers); // Attachment Off
-    OBEXAddApplicationParameterHeader("\x14\x01\x01", 3, headers); // Charset UTF-8
+    OBEXAddApplicationParameterHeader("\x0A\x01\x00\x14\x01\x01", 6, headers); // Attachment Off & Charset UTF-8
     _obexHeader = OBEXHeadersToBytes(headers);
     CFRelease(headers);
     [_session OBEXGet:YES headers:CFDataGetMutableBytePtr(_obexHeader) headersLength:CFDataGetLength(_obexHeader) eventSelector:@selector(messageLoadEvent:) selectorTarget:self refCon:nil];
