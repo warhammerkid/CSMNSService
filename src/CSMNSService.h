@@ -23,6 +23,7 @@
 
 @optional
 
+- (void)mnsService:(CSMNSService *)service listeningToDevice:(IOBluetoothDevice *)device;
 - (void)mnsService:(CSMNSService *)service messageReceived:(NSDictionary *)message;
 
 @end

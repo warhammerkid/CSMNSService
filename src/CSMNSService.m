@@ -53,6 +53,10 @@
         (id)kOBEXHeaderIDKeyConnectionID: [NSData dataWithBytesNoCopy:CONNECTION_ID length:4 freeWhenDone:NO],
         (id)kOBEXHeaderIDKeyWho: [NSData dataWithBytesNoCopy:MNS_TARGET_HEADER_UUID length:16 freeWhenDone:NO]
     }];
+
+    if([_delegate respondsToSelector:@selector(mnsService:listeningToDevice:)]) {
+        [_delegate mnsService:self listeningToDevice:[session getDevice]];
+    }
 }
 
 - (void)OBEXSession:(CSBluetoothOBEXSession *)session receivedPut:(NSDictionary *)headers {
