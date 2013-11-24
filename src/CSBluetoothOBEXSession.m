@@ -187,7 +187,7 @@ typedef struct {
     NSError *error = nil;
     NSDictionary *headers = nil;
 
-    OBEXOpCode responseCode = 0;
+    NSInteger responseCode = 0;
     switch(event->type) {
         case kOBEXSessionEventTypeConnectCommandResponseReceived:
             responseCode = event->u.connectCommandResponseData.serverResponseOpCode;

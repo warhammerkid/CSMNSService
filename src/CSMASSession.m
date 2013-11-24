@@ -41,6 +41,9 @@
                     // On iOS, the user must turn on notifications for this device to not get this message
                     NSLog(@"MAS: Connection Error: Forbidden");
                     break;
+                case kOBEXSessionTransportDiedError:
+                    NSLog(@"MAS: Could not connect");
+                    break;
                 default:
                     NSLog(@"MAS: Error on connect: %ld", error.code);
                     break;
