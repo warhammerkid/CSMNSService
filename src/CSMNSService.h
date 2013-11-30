@@ -1,17 +1,18 @@
 #import <Foundation/Foundation.h>
 #import <IOBluetooth/IOBluetooth.h>
 #import "CSMASSession.h"
-#import "CSBluetoothOBEXSession.h"
+#import "CSMNSServer.h"
 
 
 @protocol CSMNSServiceDelegate;
 
 
-@interface CSMNSService : NSObject <CSMASSessionDelegate, CSBluetoothOBEXSessionDelegate>
+@interface CSMNSService : NSObject <CSMNSServerDelegate, CSMASSessionDelegate>
 
 @property (nonatomic, assign) id<CSMNSServiceDelegate> delegate;
 
 - (BOOL)publishService;
+- (void)unpublishService;
 - (void)startListening:(IOBluetoothDevice *)device;
 - (void)startListening:(IOBluetoothDevice *)device reconnect:(BOOL)autoReconnect;
 - (void)stopListening:(IOBluetoothDevice *)device;
