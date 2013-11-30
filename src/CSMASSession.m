@@ -175,6 +175,7 @@
 }
 
 - (void)dealloc {
+    [_disconnectNotification unregister];
     [_device release];
     [_session release];
     [_connectionId release];
