@@ -5,17 +5,15 @@
 @interface CSMASSession ()
 @property (nonatomic, retain) CSBluetoothOBEXSession *session;
 @property (nonatomic, assign) IOBluetoothUserNotification *disconnectNotification;
-@property (nonatomic, retain) NSTimer *reconnectTimer;
 @end
 
 
 @implementation CSMASSession
 
-- (id)initWithDevice:(IOBluetoothDevice *)device reconnect:(BOOL)autoReconnect {
+- (id)initWithDevice:(IOBluetoothDevice *)device {
     self = [super init];
     if(self) {
         _device = [device retain];
-        _autoReconnect = autoReconnect;
     }
     return self;
 }
@@ -41,29 +39,12 @@
             // Register for disconnect
             _disconnectNotification = [_device registerForDisconnectNotification:self selector:@selector(disconnectedNotification:device:)];
 
-            // Disable reconnect timer if it's running
-            [_reconnectTimer invalidate];
-            [_reconnectTimer release];
-            _reconnectTimer = nil;
-
             // Notify delegate
             if([_delegate respondsToSelector:@selector(masSessionConnected:)]) {
                 [_delegate masSessionConnected:self];
             }
         }
     }];
-}
-
-- (void)attemptAutoReconnect {
-    if(_connectionId) {
-        NSLog(@"MAS: Did not expect to receive auto-reconnect tick when already connected");
-        [_reconnectTimer invalidate];
-        [_reconnectTimer release];
-        _reconnectTimer = nil;
-    } else {
-        NSLog(@"MAS: Attempting to reconnect to '%@'", _device.nameOrAddress);
-        [self connect];
-    }
 }
 
 - (void)setNotificationsEnabled:(BOOL)enabled {
@@ -148,11 +129,6 @@
     if([_delegate respondsToSelector:@selector(masSessionDeviceDisconnected:)]) {
         [_delegate masSessionDeviceDisconnected:self];
     }
-
-    if(_autoReconnect) {
-        NSLog(@"MAS: Automatically reconnecting to '%@' when it's in range", _device.nameOrAddress);
-        _reconnectTimer = [[NSTimer scheduledTimerWithTimeInterval:60 target:self selector:@selector(attemptAutoReconnect) userInfo:nil repeats:YES] retain];
-    }
 }
 
 - (void)handleDisconnect {
@@ -169,10 +145,7 @@
     [_device release];
     [_session release];
     [_connectionId release];
-    [_reconnectTimer invalidate];
-    [_reconnectTimer release];
-    
-    
+
     [super dealloc];
 }
 

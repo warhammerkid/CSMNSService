@@ -7,12 +7,11 @@
 
 @interface CSMASSession : NSObject
 
-@property (nonatomic, assign, readonly) BOOL autoReconnect;
 @property (nonatomic, retain, readonly) IOBluetoothDevice *device;
 @property (nonatomic, retain, readonly) NSData *connectionId;
 @property (nonatomic, assign) id<CSMASSessionDelegate> delegate;
 
-- (id)initWithDevice:(IOBluetoothDevice *)device reconnect:(BOOL)autoReconnect;
+- (id)initWithDevice:(IOBluetoothDevice *)device;
 - (void)connect;
 - (void)setNotificationsEnabled:(BOOL)enabled;
 - (void)loadMessage:(NSString *)messageHandle;
