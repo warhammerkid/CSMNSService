@@ -22,44 +22,16 @@
     return self;
 }
 
-#pragma mark - Server Side API
-
-- (BOOL)publishService {
-    return [_server publishService];
-}
-
-- (void)unpublishService {
-    [_server unpublishService];
-}
-
-#pragma mark - CSMNSServer Delegate Methods
-
-- (void)mnsServer:(CSMNSServer *)server listeningToDevice:(IOBluetoothDevice *)device {
-    if([_delegate respondsToSelector:@selector(mnsService:listeningToDevice:)]) {
-        [_delegate mnsService:self listeningToDevice:device];
-    }
-}
-
-- (void)mnsServer:(CSMNSServer *)server receivedMessage:(NSString *)messageHandle fromDevice:(IOBluetoothDevice *)device {
-    NSLog(@"MNS: New message: %@", messageHandle);
-    [[self sessionForDevice:device] loadMessage:messageHandle];
-}
-
-- (void)mnsServer:(CSMNSServer *)server deviceDisconnected:(IOBluetoothDevice *)device {
-    NSLog(@"MNS: Received disconnect");
-}
-
-- (void)mnsServer:(CSMNSServer *)server sessionError:(NSError *)error device:(IOBluetoothDevice *)device {
-    NSLog(@"MNS: Got an error event: %ld (%@)", error.code, device.nameOrAddress);
-}
-
-#pragma mark - Client Side API
+#pragma mark - Public API
 
 - (void)startListening:(IOBluetoothDevice *)device {
     [self startListening:device reconnect:NO];
 }
 
 - (void)startListening:(IOBluetoothDevice *)device reconnect:(BOOL)autoReconnect {
+    // Make sure the MNS service has been published
+    if(!_server.isPublished) [_server publishService];
+
     // Get session for device
     CSMASSession *session = [self sessionForDevice:device];
     if(!session) {
@@ -84,6 +56,35 @@
     [[self sessionForDevice:device] setNotificationsEnabled:NO];
 }
 
+- (void)stopListeningAll {
+    NSArray *sessions = [[_oneTimeSessions allValues] arrayByAddingObjectsFromArray:[_autoReconnectSessions allValues]];
+    for(CSMASSession *session in sessions) {
+        if(session.connectionId) [session setNotificationsEnabled:NO];
+        else [self removeSession:session reconnect:NO];
+    }
+}
+
+#pragma mark - CSMNSServer Delegate Methods
+
+- (void)mnsServer:(CSMNSServer *)server listeningToDevice:(IOBluetoothDevice *)device {
+    if([_delegate respondsToSelector:@selector(mnsService:listeningToDevice:)]) {
+        [_delegate mnsService:self listeningToDevice:device];
+    }
+}
+
+- (void)mnsServer:(CSMNSServer *)server receivedMessage:(NSString *)messageHandle fromDevice:(IOBluetoothDevice *)device {
+    NSLog(@"MNS: New message: %@", messageHandle);
+    [[self sessionForDevice:device] loadMessage:messageHandle];
+}
+
+- (void)mnsServer:(CSMNSServer *)server deviceDisconnected:(IOBluetoothDevice *)device {
+    NSLog(@"MNS: Received disconnect");
+}
+
+- (void)mnsServer:(CSMNSServer *)server sessionError:(NSError *)error device:(IOBluetoothDevice *)device {
+    NSLog(@"MNS: Got an error event: %ld (%@)", error.code, device.nameOrAddress);
+}
+
 #pragma mark - CSMASSession Delegate Methods
 
 - (void)masSessionConnected:(CSMASSession *)session {
@@ -95,19 +96,24 @@
     switch(error.code) {
         case kOBEXResponseCodeServiceUnavailableWithFinalBit:
             NSLog(@"MAS: Connection Error: Service Unavailable");
+            [self removeSession:session reconnect:NO];
             break;
         case kOBEXResponseCodeBadRequestWithFinalBit:
             NSLog(@"MAS: Connection Error: Bad Request");
+            [self removeSession:session reconnect:NO];
             break;
         case kOBEXResponseCodeForbiddenWithFinalBit:
             // On iOS, the user must turn on notifications for this device to not get this message
             NSLog(@"MAS: Connection Error: Forbidden");
+            [self removeSession:session reconnect:NO];
             break;
         case kOBEXSessionTransportDiedError:
             NSLog(@"MAS: Could not connect");
+            [self removeSession:session reconnect:YES];
             break;
         default:
             NSLog(@"MAS: Error on connect: %ld", error.code);
+            [self removeSession:session reconnect:NO];
             break;
     }
 }
@@ -160,13 +166,21 @@
 }
 
 - (void)removeSession:(CSMASSession *)session reconnect:(BOOL)doReconnect {
+    // Remove session from oneTimeSessions/autoReconnectSessions
     IOBluetoothDevice *device = session.device;
     [_oneTimeSessions removeObjectForKey:device];
     if(doReconnect && [_autoReconnectSessions objectForKey:device]) {
+        // Not user-triggered disconnect - leave in autoReconnectSessions for auto-reconnect to pick up
         NSLog(@"MAS: Automatically reconnecting to '%@' when it's in range", device.nameOrAddress);
         [self scheduleAutoReconnect];
     } else {
         [_autoReconnectSessions removeObjectForKey:device];
+    }
+
+    // IF there are no more active sessions, shut down MNS server
+    if([_oneTimeSessions count] == 0 && [_autoReconnectSessions count] == 0) {
+        NSLog(@"MNS: No MAS sessions - unpublishing");
+        [_server unpublishService];
     }
 }
 
