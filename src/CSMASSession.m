@@ -30,23 +30,8 @@
         (id)kOBEXHeaderIDKeyTarget: [NSData dataWithBytesNoCopy:MAS_TARGET_HEADER_UUID length:16 freeWhenDone:NO]
     } handler:^(CSBluetoothOBEXSession *session, NSDictionary *headers, NSError *error) {
         if(error) {
-            switch(error.code) {
-                case kOBEXResponseCodeServiceUnavailableWithFinalBit:
-                    NSLog(@"MAS: Connection Error: Service Unavailable");
-                    break;
-                case kOBEXResponseCodeBadRequestWithFinalBit:
-                    NSLog(@"MAS: Connection Error: Bad Request");
-                    break;
-                case kOBEXResponseCodeForbiddenWithFinalBit:
-                    // On iOS, the user must turn on notifications for this device to not get this message
-                    NSLog(@"MAS: Connection Error: Forbidden");
-                    break;
-                case kOBEXSessionTransportDiedError:
-                    NSLog(@"MAS: Could not connect");
-                    break;
-                default:
-                    NSLog(@"MAS: Error on connect: %ld", error.code);
-                    break;
+            if([_delegate respondsToSelector:@selector(masSession:connectionError:)]) {
+                [_delegate masSession:self connectionError:error];
             }
         } else {
             // Get connection id
@@ -92,9 +77,10 @@
         (id)kOBEXHeaderIDKeyAppParameters: appParams
     } body:emptyBody handler:^(CSBluetoothOBEXSession *session, NSDictionary *headers, NSError *error) {
         if(error) {
-            NSLog(@"MAS: Error changing notification state: %ld", error.code);
+            if([_delegate respondsToSelector:@selector(masSession:notificationsChangeError:)]) {
+                [_delegate masSession:self notificationsChangeError:error];
+            }
         } else if(enabled) {
-            NSLog(@"MAS: Notifications enabled");
             if([_delegate respondsToSelector:@selector(masSessionNotificationsEnabled:)]) {
                 [_delegate masSessionNotificationsEnabled:self];
             }
@@ -116,12 +102,14 @@
         (id)kOBEXHeaderIDKeyAppParameters: [NSData dataWithBytesNoCopy:"\x0A\x01\x00\x14\x01\x01" length:6 freeWhenDone:NO] // Attachment Off & Charset UTF-8
     } handler:^(CSBluetoothOBEXSession *session, NSDictionary *headers, NSError *error) {
         if(error) {
-            NSLog(@"MAS: Error loading message: %ld", error.code);
+            if([_delegate respondsToSelector:@selector(masSession:message:loadError:)]) {
+                [_delegate masSession:self message:messageHandle loadError:error];
+            }
         } else {
             NSString *body = [[NSString alloc] initWithData:headers[(id)kOBEXHeaderIDKeyEndOfBody] encoding:NSUTF8StringEncoding];
-            if([_delegate respondsToSelector:@selector(masSession:messageDataLoaded:)]) {
+            if([_delegate respondsToSelector:@selector(masSession:message:dataLoaded:)]) {
                 NSDictionary *message = [self parseMessageBody:body];
-                [_delegate masSession:self messageDataLoaded:message];
+                [_delegate masSession:self message:messageHandle dataLoaded:message];
             }
             [body release];
         }
@@ -143,17 +131,23 @@
         (id)kOBEXHeaderIDKeyConnectionID: _connectionId
     } handler:^(CSBluetoothOBEXSession *session, NSDictionary *headers, NSError *error) {
         if(error) {
-            NSLog(@"MAS: Error on disconnect: %ld", error.code);
+            if([_delegate respondsToSelector:@selector(masSession:disconnectionError:)]) {
+                [_delegate masSession:self disconnectionError:error];
+            }
         } else {
-            NSLog(@"MAS: Disconnect success");
             [self handleDisconnect];
+            if([_delegate respondsToSelector:@selector(masSessionDisconnected:)]) {
+                [_delegate masSessionDisconnected:self];
+            }
         }
     }];
 }
 
 - (void)disconnectedNotification:(IOBluetoothUserNotification *)notification device:(IOBluetoothDevice *)device {
-    NSLog(@"MAS: Client disconnected");
     [self handleDisconnect];
+    if([_delegate respondsToSelector:@selector(masSessionDeviceDisconnected:)]) {
+        [_delegate masSessionDeviceDisconnected:self];
+    }
 
     if(_autoReconnect) {
         NSLog(@"MAS: Automatically reconnecting to '%@' when it's in range", _device.nameOrAddress);
@@ -168,10 +162,6 @@
     _connectionId = nil;
     [_session release];
     _session = nil;
-    
-    if([_delegate respondsToSelector:@selector(masSessionDisconnected:)]) {
-        [_delegate masSessionDisconnected:self];
-    }
 }
 
 - (void)dealloc {

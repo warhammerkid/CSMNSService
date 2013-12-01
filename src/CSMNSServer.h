@@ -22,5 +22,7 @@
 
 - (void)mnsServer:(CSMNSServer *)server listeningToDevice:(IOBluetoothDevice *)device;
 - (void)mnsServer:(CSMNSServer *)server receivedMessage:(NSString *)messageHandle fromDevice:(IOBluetoothDevice *)device;
+- (void)mnsServer:(CSMNSServer *)server deviceDisconnected:(IOBluetoothDevice *)device;
+- (void)mnsServer:(CSMNSServer *)server sessionError:(NSError *)error device:(IOBluetoothDevice *)device;
 
 @end
