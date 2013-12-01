@@ -79,6 +79,9 @@
 
 - (void)mnsServer:(CSMNSServer *)server deviceDisconnected:(IOBluetoothDevice *)device {
     NSLog(@"MNS: Received disconnect");
+    if([_delegate respondsToSelector:@selector(mnsService:stoppedListeningToDevice:)]) {
+        [_delegate mnsService:self stoppedListeningToDevice:device];
+    }
 }
 
 - (void)mnsServer:(CSMNSServer *)server sessionError:(NSError *)error device:(IOBluetoothDevice *)device {
