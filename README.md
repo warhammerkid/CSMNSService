@@ -8,6 +8,5 @@ Example:
 
 ```Objective-C
 CSMNSService *service = [CSMNSService new];
-[service publishService];
 [service startListening:[IOBluetoothDevice deviceWithAddressString:@"00-00-00-00-00-00"]];
 ```
